@@ -52,7 +52,7 @@ export class UserService {
       where: { telegramId: String(telegramId) },
       include: {
         subscriptions: { where: { isActive: true } },
-        marketplaces: { where: { isActive: true } },  // <-- ИСПРАВЛЕНО: добавлен фильтр
+        marketplaces: { where: { isActive: true } },
       },
     });
   }
@@ -77,6 +77,27 @@ export class UserService {
   async clearTempData(telegramId) {
     this.tempStorage.delete(String(telegramId));
   }
+
+  // НОВЫЕ МЕТОДЫ ДЛЯ АДМИН-ПАНЕЛИ:
+  
+  async getAllUsers() {
+    return prisma.user.findMany({
+      include: {
+        subscriptions: { where: { isActive: true } },
+        _count: { select: { marketplaces: true } }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50
+    });
+  }
+
+  async getUserStats() {
+    const total = await prisma.user.count();
+    const pro = await prisma.subscription.count({
+      where: { type: 'PRO', isActive: true }
+    });
+    return { total, pro, free: total - pro };
+  }
 }
 
-export const userService = new UserService();
+export const user
