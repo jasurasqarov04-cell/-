@@ -5,6 +5,9 @@ const logger = createLogger('UserService');
 const prisma = new PrismaClient();
 
 export class UserService {
+  // Временное хранилище для состояний пользователей (в памяти)
+  tempStorage = new Map();
+
   async registerUser(telegramId, username) {
     try {
       let user = await prisma.user.findUnique({
@@ -60,6 +63,19 @@ export class UserService {
       select: { role: true }
     });
     return user?.role === 'ADMIN';
+  }
+
+  // Методы для временного хранения данных (состояния диалогов)
+  async setTempData(telegramId, data) {
+    this.tempStorage.set(String(telegramId), data);
+  }
+
+  async getTempData(telegramId) {
+    return this.tempStorage.get(String(telegramId));
+  }
+
+  async clearTempData(telegramId) {
+    this.tempStorage.delete(String(telegramId));
   }
 }
 
