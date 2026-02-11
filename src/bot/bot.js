@@ -345,7 +345,7 @@ export class MarketplaceBot {
       }
     });
 
-        // 7. Команда /sub (Подписка) - УЛУЧШЕННАЯ
+    // 7. Команда /sub (Подписка) - УЛУЧШЕННАЯ
     this.bot.onText(/Подписка|\/sub/, async (msg) => {
       const chatId = msg.chat.id;
       try {
@@ -416,7 +416,7 @@ export class MarketplaceBot {
       });
     });
 
-    // 8. Команда /admin (Админ панель) - ИСПРАВЛЕНО: проверка через ADMIN_IDS
+    // 9. Команда /admin (Админ панель) - ИСПРАВЛЕНО: проверка через ADMIN_IDS
     this.bot.onText(/\/admin|🔧 Админ панель/, async (msg) => {
       const chatId = msg.chat.id;
       
@@ -449,7 +449,45 @@ export class MarketplaceBot {
       }
     });
 
-    // 9. Обработка inline кнопок (callback_query)
+    // 10. Команда /grant (быстрая выдача PRO админом) - НОВАЯ
+    this.bot.onText(/\/grant (\d+) (\d+)/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      
+      // Проверка админ
+      if (!config.bot.adminIds.includes(String(msg.from.id))) {
+        return;
+      }
+      
+      const targetId = match[1];
+      const days = parseInt(match[2]);
+      
+      try {
+        const targetUser = await userService.getUserByTelegramId(targetId);
+        if (!targetUser) {
+          return this.bot.sendMessage(chatId, '❌ Пользователь не найден');
+        }
+        
+        await subscriptionService.grantPro(targetUser.id, days);
+        
+        await this.bot.sendMessage(chatId, 
+          `✅ PRO выдан!\n\nПользователь: @${targetUser.username || targetId}\nСрок: ${days} дней`
+        );
+        
+        // Уведомляем пользователя
+        await this.bot.sendMessage(targetId,
+          `🎉 <b>Вам выдан доступ PRO!</b>\n\n` +
+          `Срок: ${days} дней\n` +
+          `Все функции разблокированы.\n\n` +
+          `Управление: /sub`,
+          { parse_mode: 'HTML' }
+        );
+      } catch (err) {
+        logger.error('Grant error:', err.message);
+        await this.bot.sendMessage(chatId, '❌ Ошибка выдачи');
+      }
+    });
+
+    // 11. Обработка inline кнопок (callback_query)
     this.bot.on('callback_query', async (query) => {
       const chatId = query.message.chat.id;
       const data = query.data;
@@ -517,7 +555,66 @@ export class MarketplaceBot {
           { parse_mode: 'HTML' }
         );
       }
+
+      // Пробный PRO (1 день) - автовыдача
+      if (data === 'trial_pro') {
+        await this.bot.answerCallbackQuery(query.id);
+        
+        try {
+          const user = await userService.getUserByTelegramId(query.from.id);
+          
+          // Проверяем не брал ли уже пробный
+          const hasPro = await subscriptionService.hasActivePro(user.id);
+          if (hasPro) {
+            return this.bot.sendMessage(chatId, '❌ У вас уже активна PRO подписка!');
+          }
+
+          // Выдаем пробный на 1 день
+          await subscriptionService.grantPro(user.id, 1);
+          
+          await this.bot.sendMessage(chatId,
+            '🎉 <b>Пробный PRO активирован!</b>\n\n' +
+            '✅ Доступен на 1 день\n' +
+            '✅ Все функции PRO разблокированы\n\n' +
+            'После окончания можно купить полную версию: /buy',
+            { parse_mode: 'HTML' }
+          );
+          
+        } catch (err) {
+          logger.error('Trial PRO error:', err.message);
+          await this.bot.sendMessage(chatId, '❌ Ошибка активации пробного периода');
+        }
+      }
+
+      // Запрос на покупку PRO
+      if (data.startsWith('buy_pro_')) {
+        const days = data.replace('buy_pro_', '');
+        await this.bot.answerCallbackQuery(query.id);
+        
+        // Отправляем уведомление админу
+        const user = await userService.getUserByTelegramId(query.from.id);
+        const adminMsg = `💳 <b>Новый запрос на PRO!</b>\n\n` +
+          `Пользователь: @${user.username || user.telegramId}\n` +
+          `ID: ${user.telegramId}\n` +
+          `Тариф: ${days} дней\n\n` +
+          `Для выдачи отправь:\n/grant ${user.telegramId} ${days}`;
+        
+        // Отправляем всем админам
+        for (const adminId of config.bot.adminIds) {
+          try {
+            await this.bot.sendMessage(adminId, adminMsg, { parse_mode: 'HTML' });
+          } catch (err) {
+            logger.error('Failed to notify admin:', err.message);
+          }
+        }
+        
+        await this.bot.sendMessage(chatId,
+          '✅ <b>Заявка отправлена!</b>\n\n' +
+          'Администратор получил уведомление и скоро активирует ваш PRO доступ.\n\n' +
+          '⏳ Обычно это занимает 10-30 минут.',
+          { parse_mode: 'HTML' }
+        );
+      }
     });
   }
 }
-
