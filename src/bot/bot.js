@@ -345,24 +345,75 @@ export class MarketplaceBot {
       }
     });
 
-    // 7. Команда /sub (Подписка)
+        // 7. Команда /sub (Подписка) - УЛУЧШЕННАЯ
     this.bot.onText(/Подписка|\/sub/, async (msg) => {
       const chatId = msg.chat.id;
       try {
         const user = await userService.getUserByTelegramId(msg.from.id);
         const info = await subscriptionService.getSubscriptionInfo(user.id);
         
-        let text = `Подписка: ${info.type}\n`;
-        if (info.type === 'FREE') {
-          text += '\nFREE: 50 заказов/день\nPRO: безлимит';
-        } else {
-          text += `\nДо: ${info.endDate?.toLocaleDateString()}`;
-        }
+        let message = '💎 <b>Управление подпиской</b>\n\n';
+        message += `📊 Ваш текущий тариф: <b>${info.type}</b>\n`;
         
-        await this.bot.sendMessage(chatId, text);
+        if (info.type === 'PRO' && info.daysLeft) {
+          message += `⏳ Осталось дней: ${info.daysLeft}\n`;
+          message += `📅 Действует до: ${info.endDate?.toLocaleDateString('ru-RU')}\n\n`;
+        } else {
+          message += '\n';
+        }
+
+        message += '<b>🆓 FREE (Бесплатно):</b>\n';
+        message += '• 1 магазин\n';
+        message += '• 50 заказов в день\n';
+        message += '• Базовая статистика\n\n';
+
+        message += '<b>💎 PRO ($9/мес):</b>\n';
+        message += '• Безлимит магазинов\n';
+        message += '• Безлимит заказов\n';
+        message += '• Приоритетная поддержка\n';
+        message += '• API доступ\n\n';
+
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: '🎁 Пробный PRO (1 день)', callback_data: 'trial_pro' }],
+            [{ text: '💳 Купить PRO', callback_data: 'buy_pro' }]
+          ]
+        };
+
+        // Если админ, добавляем кнопку выдачи
+        if (config.bot.adminIds.includes(String(msg.from.id))) {
+          keyboard.inline_keyboard.push([{ text: '⚡ Выдать PRO (админ)', callback_data: 'admin_grant_pro' }]);
+        }
+
+        await this.bot.sendMessage(chatId, message, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard
+        });
       } catch (err) {
         logger.error('Sub error: ' + err.message);
       }
+    });
+
+    // 8. Команда /buy (Покупка PRO) - НОВАЯ
+    this.bot.onText(/\/buy|Купить PRO/, async (msg) => {
+      const chatId = msg.chat.id;
+      
+      const message = '💳 <b>Выберите срок подписки PRO:</b>\n\n' +
+        '<b>7 дней</b> — $3\n' +
+        '<b>30 дней</b> — $9 (выгода 25%)\n' +
+        '<b>90 дней</b> — $24 (выгода 33%)\n\n' +
+        '💡 Для оплаты свяжитесь с администратором: @admin';
+
+      await this.bot.sendMessage(chatId, message, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '7 дней — $3', callback_data: 'buy_pro_7' }],
+            [{ text: '30 дней — $9', callback_data: 'buy_pro_30' }],
+            [{ text: '90 дней — $24', callback_data: 'buy_pro_90' }]
+          ]
+        }
+      });
     });
 
     // 8. Команда /admin (Админ панель) - ИСПРАВЛЕНО: проверка через ADMIN_IDS
@@ -469,3 +520,4 @@ export class MarketplaceBot {
     });
   }
 }
+
