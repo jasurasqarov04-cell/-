@@ -33,29 +33,28 @@ export class MarketplaceBot {
   setupExpress() {
     this.app.use(express.json());
     
+    // Health check - вот этот endpoint!
     this.app.get('/health', (req, res) => {
-      res.json({ 
-        status: 'ok', 
-        timestamp: new Date().toISOString()
-      });
+      res.json({ status: 'ok', timestamp: new Date().toISOString() });
     });
 
     if (config.bot.webhookUrl) {
-      const webhookPath = `/webhook/${config.bot.token}`;
-      this.app.post(webhookPath, (req, res) => {
+      const path = `/webhook/${config.bot.token}`;
+      this.app.post(path, (req, res) => {
         this.bot.processUpdate(req.body);
         res.sendStatus(200);
       });
+      logger.info(`Webhook path: ${path}`);
     }
   }
 
   async setupWebhook() {
     try {
-      const webhookUrl = `${config.bot.webhookUrl}/webhook/${config.bot.token}`;
-      await this.bot.setWebHook(webhookUrl);
-      logger.info(`Webhook установлен: ${webhookUrl}`);
-    } catch (error) {
-      logger.error('Ошибка webhook: ' + error.message);
+      const url = `${config.bot.webhookUrl}/webhook/${config.bot.token}`;
+      await this.bot.setWebHook(url);
+      logger.info(`Webhook установлен: ${url}`);
+    } catch (err) {
+      logger.error('Ошибка webhook: ' + err.message);
     }
   }
 
@@ -68,42 +67,42 @@ export class MarketplaceBot {
         const { user, isNew } = await userService.registerUser(msg.from.id, username);
         const subInfo = await subscriptionService.getSubscriptionInfo(user.id);
         
-        let message = `👋 Привет, ${username}!\n\n`;
-        if (isNew) message += `🎉 Добро пожаловать!\n\n`;
+        let message = `Привет, ${username}!\n\n`;
+        if (isNew) message += `Добро пожаловать!\n\n`;
         
-        message += `📊 Тариф: ${subInfo.type}\n`;
+        message += `Тариф: ${subInfo.type}\n`;
         if (subInfo.type === 'PRO' && subInfo.daysLeft) {
-          message += `⏳ Осталось: ${subInfo.daysLeft} дней\n`;
+          message += `Осталось: ${subInfo.daysLeft} дней\n`;
         }
         
         await this.bot.sendMessage(chatId, message, {
-          parse_mode: 'HTML',
           reply_markup: {
-            keyboard: [[{ text: '💎 Подписка' }]],
+            keyboard: [[{ text: 'Подписка' }]],
             resize_keyboard: true
           }
         });
-      } catch (error) {
-        await this.bot.sendMessage(chatId, '❌ Ошибка сервера');
+      } catch (err) {
+        logger.error('Start error: ' + err.message);
+        await this.bot.sendMessage(chatId, 'Ошибка сервера: ' + err.message);
       }
     });
 
-    this.bot.onText(/💎 Подписка|\/sub/, async (msg) => {
+    this.bot.onText(/Подписка|\/sub/, async (msg) => {
       const chatId = msg.chat.id;
       try {
         const user = await userService.getUserByTelegramId(msg.from.id);
-        const subInfo = await subscriptionService.getSubscriptionInfo(user.id);
+        const info = await subscriptionService.getSubscriptionInfo(user.id);
         
-        let text = `💎 Подписка\n\nТариф: ${subInfo.type}\n`;
-        if (subInfo.type === 'FREE') {
-          text += `\n🆓 FREE:\n• 50 заказов/день\n• 1 магазин\n\n💎 PRO:\n• Безлимит\n• Все маркетплейсы`;
+        let text = `Подписка: ${info.type}\n`;
+        if (info.type === 'FREE') {
+          text += '\nFREE: 50 заказов/день\nPRO: безлимит';
         } else {
-          text += `\nДо: ${subInfo.endDate?.toLocaleDateString()}\nОсталось: ${subInfo.daysLeft} дн.`;
+          text += `\nДо: ${info.endDate?.toLocaleDateString()}`;
         }
         
         await this.bot.sendMessage(chatId, text);
-      } catch (error) {
-        console.error(error);
+      } catch (err) {
+        logger.error('Sub error: ' + err.message);
       }
     });
   }
