@@ -30,6 +30,24 @@ export class MarketplaceService {
       orderBy: { createdAt: 'desc' }
     });
   }
+
+  // ДОБАВЛЯЕМ ЭТОТ МЕТОД:
+  async delete(id, userId) {
+    try {
+      const result = await prisma.marketplace.update({
+        where: { 
+          id: id,
+          userId: userId  // Проверка что магазин принадлежит пользователю
+        },
+        data: { isActive: false }
+      });
+      logger.info(`Marketplace deleted: ${id}`);
+      return result;
+    } catch (error) {
+      logger.error('Delete marketplace error: ' + error.message);
+      throw error;
+    }
+  }
 }
 
 export const marketplaceService = new MarketplaceService();
