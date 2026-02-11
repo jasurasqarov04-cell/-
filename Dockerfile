@@ -14,4 +14,5 @@ COPY . .
 
 EXPOSE 3000
 
-CMD ["node", "src/app.js"]
+# Автоматически применяем миграции и запускаем сервер
+CMD npx prisma migrate deploy && node src/app.js
