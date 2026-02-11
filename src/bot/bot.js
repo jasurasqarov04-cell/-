@@ -80,6 +80,66 @@ export class MarketplaceBot {
             keyboard: [[{ text: 'Подписка' }]],
             resize_keyboard: true
           }
+              // Добавление маркетплейса
+    this.bot.onText(/\/addmarket|Добавить магазин/, async (msg) => {
+      const chatId = msg.chat.id;
+      try {
+        const user = await userService.getUserByTelegramId(msg.from.id);
+        
+        // Проверка лимита для FREE
+        const count = user.marketplaces?.length || 0;
+        const hasPro = await subscriptionService.hasActivePro(user.id);
+        
+        if (!hasPro && count >= 1) {
+          return this.bot.sendMessage(chatId, 
+            '❌ На бесплатном тарифе можно добавить только 1 магазин.\n\n' +
+            '💎 Обновитесь до PRO для безлимитного количества.',
+            { parse_mode: 'HTML' }
+          );
+        }
+
+        // Меню выбора маркетплейса
+        await this.bot.sendMessage(chatId, 
+          '🏪 Выберите маркетплейс:\n\n' +
+          '• Uzum\n' +
+          '• Wildberries\n' +
+          '• Ozon',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🟣 Uzum', callback_data: 'market_uzum' }],
+                [{ text: '🔵 Wildberries', callback_data: 'market_wb' }],
+                [{ text: '🟠 Ozon', callback_data: 'market_ozon' }]
+              ]
+            }
+          }
+        );
+      } catch (err) {
+        logger.error('Addmarket error: ' + err.message);
+        await this.bot.sendMessage(chatId, '❌ Ошибка сервера');
+      }
+    });
+
+    // Обработка выбора маркетплейса
+    this.bot.on('callback_query', async (query) => {
+      const chatId = query.message.chat.id;
+      const data = query.data;
+      
+      if (data.startsWith('market_')) {
+        const market = data.replace('market_', '').toUpperCase();
+        await this.bot.answerCallbackQuery(query.id);
+        
+        // Сохраняем состояние пользователя (ждем API ключ)
+        await userService.setTempData(query.from.id, { action: 'add_api', market });
+        
+        await this.bot.sendMessage(chatId,
+          `🔑 Введите API ключ для ${market}:\n\n` +
+          `Формат: api_key|api_secret (если есть secret, через |)\n` +
+          `Пример: 123456789|secret123`,
+          { parse_mode: 'HTML' }
+        );
+      }
+    });
         });
       } catch (err) {
         logger.error('Start error: ' + err.message);
@@ -107,3 +167,4 @@ export class MarketplaceBot {
     });
   }
 }
+
