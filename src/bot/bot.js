@@ -171,7 +171,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 4. Команда /mystores (список магазинов) - НОВОЕ
+    // 4. Команда /mystores (список магазинов)
     this.bot.onText(/\/mystores|Мои магазины/, async (msg) => {
       const chatId = msg.chat.id;
       try {
@@ -215,7 +215,88 @@ export class MarketplaceBot {
       }
     });
 
-    // 5. Команда /sub (Подписка)
+    // 5. Команда /sync (синхронизация заказов) - НОВОЕ
+    this.bot.onText(/\/sync|Синхронизировать заказы/, async (msg) => {
+      const chatId = msg.chat.id;
+      
+      try {
+        const user = await userService.getUserByTelegramId(msg.from.id);
+        
+        if (!user.marketplaces || user.marketplaces.length === 0) {
+          return this.bot.sendMessage(chatId,
+            '❌ У вас нет добавленных магазинов.\n\n' +
+            'Добавьте магазин: /addmarket'
+          );
+        }
+
+        await this.bot.sendMessage(chatId, '🔄 Начинаю синхронизацию...');
+        
+        const { orderService } = await import('../modules/orders/order.service.js');
+        let totalSynced = 0;
+        
+        // Синхронизируем все магазины
+        for (const marketplace of user.marketplaces) {
+          try {
+            const result = await orderService.syncOrders(user.id, marketplace.id);
+            totalSynced += result.saved;
+          } catch (err) {
+            logger.error(`Sync error for ${marketplace.name}:`, err.message);
+          }
+        }
+        
+        await this.bot.sendMessage(chatId,
+          `✅ Синхронизация завершена!\n\n` +
+          `📦 Загружено заказов: ${totalSynced}\n\n` +
+          `Просмотреть: /orders`,
+          { parse_mode: 'HTML' }
+        );
+        
+      } catch (err) {
+        logger.error('Sync command error:', err.message);
+        await this.bot.sendMessage(chatId, '❌ Ошибка синхронизации: ' + err.message);
+      }
+    });
+
+    // 6. Команда /orders (список заказов / 📊 Мои заказы) - НОВОЕ
+    this.bot.onText(/\/orders|📊 Мои заказы/, async (msg) => {
+      const chatId = msg.chat.id;
+      
+      try {
+        const user = await userService.getUserByTelegramId(msg.from.id);
+        const { orderService } = await import('../modules/orders/order.service.js');
+        const orders = await orderService.getOrdersByUser(user.id);
+        
+        if (orders.length === 0) {
+          return this.bot.sendMessage(chatId,
+            '📭 У вас пока нет заказов.\n\n' +
+            'Загрузите заказы: /sync',
+            { parse_mode: 'HTML' }
+          );
+        }
+        
+        let message = '📊 <b>Последние заказы:</b>\n\n';
+        
+        orders.slice(0, 10).forEach((order, index) => {
+          const data = order.data;
+          message += `${index + 1}. <b>#${order.externalId}</b> | ${order.marketplace.name}\n`;
+          message += `   Статус: ${order.status}\n`;
+          message += `   Сумма: ${data.totalAmount || 'N/A'} сум\n`;
+          message += `   Дата: ${new Date(order.createdAt).toLocaleDateString('ru-RU')}\n\n`;
+        });
+        
+        if (orders.length > 10) {
+          message += `\n💡 И ещё ${orders.length - 10} заказов...`;
+        }
+        
+        await this.bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+        
+      } catch (err) {
+        logger.error('Orders command error:', err.message);
+        await this.bot.sendMessage(chatId, '❌ Ошибка получения заказов');
+      }
+    });
+
+    // 7. Команда /sub (Подписка)
     this.bot.onText(/Подписка|\/sub/, async (msg) => {
       const chatId = msg.chat.id;
       try {
@@ -235,7 +316,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 6. Обработка inline кнопок (callback_query)
+    // 8. Обработка inline кнопок (callback_query)
     this.bot.on('callback_query', async (query) => {
       const chatId = query.message.chat.id;
       const data = query.data;
@@ -255,7 +336,7 @@ export class MarketplaceBot {
         );
       }
       
-      // Удаление магазина - НОВОЕ
+      // Удаление магазина
       if (data.startsWith('delete_store_')) {
         const storeId = data.replace('delete_store_', '');
         await this.bot.answerCallbackQuery(query.id);
