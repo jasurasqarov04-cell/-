@@ -52,7 +52,7 @@ export class UserService {
       where: { telegramId: String(telegramId) },
       include: {
         subscriptions: { where: { isActive: true } },
-        marketplaces: true,
+        marketplaces: { where: { isActive: true } },  // <-- ИСПРАВЛЕНО: добавлен фильтр
       },
     });
   }
