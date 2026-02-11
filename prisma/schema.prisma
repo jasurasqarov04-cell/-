@@ -37,6 +37,21 @@ model Marketplace {
   apiSecret String?
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
+  orders    Order[]  // <-- ДОБАВЛЕНО: связь с Order
+}
+
+// НОВАЯ МОДЕЛЬ: Заказы
+model Order {
+  id             String      @id @default(uuid())
+  marketplaceId  String
+  marketplace    Marketplace @relation(fields: [marketplaceId], references: [id])
+  externalId     String
+  data           Json
+  status         String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@unique([marketplaceId, externalId])
 }
 
 enum UserRole {
