@@ -316,7 +316,40 @@ export class MarketplaceBot {
       }
     });
 
-    // 8. Обработка inline кнопок (callback_query)
+        // 8. Команда /admin (только для админов)
+    this.bot.onText(/\/admin/, async (msg) => {
+      const chatId = msg.chat.id;
+      
+      try {
+        const user = await userService.getUserByTelegramId(msg.from.id);
+        
+        if (!await userService.isAdmin(user.id)) {
+          return this.bot.sendMessage(chatId, '⛔ У вас нет доступа к админ-панели');
+        }
+
+        const stats = await userService.getUserStats();
+        
+        let message = '🔧 <b>Админ панель</b>\n\n';
+        message += `👥 Всего пользователей: ${stats.total}\n`;
+        message += `💎 PRO: ${stats.pro}\n`;
+        message += `🆓 FREE: ${stats.free}\n\n`;
+        message += 'Выберите действие:';
+
+        await this.bot.sendMessage(chatId, message, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '👥 Список пользователей', callback_data: 'admin_users' }],
+              [{ text: '⚡ Выдать PRO', callback_data: 'admin_grant_pro' }]
+            ]
+          }
+        });
+      } catch (err) {
+        logger.error('Admin error: ' + err.message);
+        await this.bot.sendMessage(chatId, '❌ Ошибка админ-панели');
+      }
+    });
+    // 9. Обработка inline кнопок (callback_query)
     this.bot.on('callback_query', async (query) => {
       const chatId = query.message.chat.id;
       const data = query.data;
@@ -355,3 +388,4 @@ export class MarketplaceBot {
     });
   }
 }
+
