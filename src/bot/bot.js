@@ -59,13 +59,53 @@ export class MarketplaceBot {
   }
 
   setupHandlers() {
-    // 1. Обработка текстовых сообщений (API ключи и т.д.)
+    // 1. Обработка текстовых сообщений (API ключи, админ команды и т.д.)
     this.bot.on('message', async (msg) => {
       if (!msg.text || msg.text.startsWith('/')) return;
       
       const chatId = msg.chat.id;
       const tempData = await userService.getTempData(msg.from.id);
       
+      // Выдача PRO админом
+      if (tempData?.action === 'grant_pro') {
+        const [targetId, days] = msg.text.split(' ');
+        
+        if (!targetId || !days || isNaN(days)) {
+          return this.bot.sendMessage(chatId, '❌ Неверный формат. Пример: 123456789 30');
+        }
+
+        try {
+          const targetUser = await userService.getUserByTelegramId(targetId);
+          if (!targetUser) {
+            return this.bot.sendMessage(chatId, '❌ Пользователь не найден');
+          }
+
+          await subscriptionService.grantPro(targetUser.id, parseInt(days));
+          await userService.clearTempData(msg.from.id);
+          
+          await this.bot.sendMessage(chatId, 
+            `✅ PRO выдан пользователю @${targetUser.username || targetId} на ${days} дней!`
+          );
+          
+          // Уведомляем пользователя
+          try {
+            await this.bot.sendMessage(targetId, 
+              `🎉 Вам выдана PRO подписка на ${days} дней!\n\n` +
+              `Теперь у вас:\n` +
+              `✅ Безлимитные заказы\n` +
+              `✅ Все маркетплейсы\n` +
+              `✅ Приоритетная поддержка`
+            );
+          } catch (notifyErr) {
+            logger.error('Failed to notify user: ' + notifyErr.message);
+          }
+        } catch (err) {
+          await this.bot.sendMessage(chatId, '❌ Ошибка выдачи PRO: ' + err.message);
+        }
+        return;
+      }
+      
+      // Добавление API ключа для магазина
       if (tempData?.action === 'add_api') {
         const [apiKey, apiSecret] = msg.text.split('|').map(s => s.trim());
         
@@ -121,12 +161,21 @@ export class MarketplaceBot {
           message += `Осталось: ${subInfo.daysLeft} дней\n`;
         }
         
+        // Проверяем админ ли для добавления кнопки админки
+        const isAdmin = await userService.isAdmin(user.id);
+        const keyboard = [
+          [{ text: '🏪 Добавить магазин' }, { text: '📊 Мои заказы' }],
+          [{ text: '💎 Подписка' }]
+        ];
+        
+        // Добавляем кнопку админки если админ
+        if (isAdmin) {
+          keyboard.push([{ text: '🔧 Админ панель' }]);
+        }
+        
         await this.bot.sendMessage(chatId, message, {
           reply_markup: {
-            keyboard: [
-              [{ text: '🏪 Добавить магазин' }, { text: '📊 Мои заказы' }],
-              [{ text: '💎 Подписка' }]
-            ],
+            keyboard: keyboard,
             resize_keyboard: true
           }
         });
@@ -215,7 +264,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 5. Команда /sync (синхронизация заказов) - НОВОЕ
+    // 5. Команда /sync (синхронизация заказов)
     this.bot.onText(/\/sync|Синхронизировать заказы/, async (msg) => {
       const chatId = msg.chat.id;
       
@@ -257,7 +306,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 6. Команда /orders (список заказов / 📊 Мои заказы) - НОВОЕ
+    // 6. Команда /orders (список заказов / 📊 Мои заказы)
     this.bot.onText(/\/orders|📊 Мои заказы/, async (msg) => {
       const chatId = msg.chat.id;
       
@@ -316,8 +365,8 @@ export class MarketplaceBot {
       }
     });
 
-        // 8. Команда /admin (только для админов)
-    this.bot.onText(/\/admin/, async (msg) => {
+    // 8. Команда /admin (Админ панель) - НОВОЕ
+    this.bot.onText(/\/admin|🔧 Админ панель/, async (msg) => {
       const chatId = msg.chat.id;
       
       try {
@@ -349,6 +398,7 @@ export class MarketplaceBot {
         await this.bot.sendMessage(chatId, '❌ Ошибка админ-панели');
       }
     });
+
     // 9. Обработка inline кнопок (callback_query)
     this.bot.on('callback_query', async (query) => {
       const chatId = query.message.chat.id;
@@ -385,7 +435,38 @@ export class MarketplaceBot {
           await this.bot.sendMessage(chatId, '❌ Ошибка удаления магазина');
         }
       }
+      
+      // Админ: список пользователей
+      if (data === 'admin_users') {
+        await this.bot.answerCallbackQuery(query.id);
+        
+        try {
+          const users = await userService.getAllUsers();
+          let message = '👥 <b>Пользователи (последние 50):</b>\n\n';
+          
+          users.forEach((u, i) => {
+            const sub = u.subscriptions[0]?.type || 'FREE';
+            const date = u.createdAt.toLocaleDateString('ru-RU');
+            message += `${i+1}. @${u.username || 'нет'} | ${sub} | Магазинов: ${u._count.marketplaces} | ${date}\n`;
+          });
+          
+          await this.bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+        } catch (err) {
+          logger.error('Admin users error:', err.message);
+          await this.bot.sendMessage(chatId, '❌ Ошибка получения списка');
+        }
+      }
+
+      // Админ: выдать PRO (запрос ID)
+      if (data === 'admin_grant_pro') {
+        await this.bot.answerCallbackQuery(query.id);
+        await userService.setTempData(query.from.id, { action: 'grant_pro' });
+        await this.bot.sendMessage(chatId, 
+          '⚡ Введите Telegram ID пользователя и количество дней через пробел:\n\n' +
+          'Пример: 123456789 30',
+          { parse_mode: 'HTML' }
+        );
+      }
     });
   }
 }
-
