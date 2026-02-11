@@ -6,38 +6,35 @@ const prisma = new PrismaClient();
 
 export class SubscriptionService {
   async hasActivePro(userId) {
-    const subscription = await prisma.subscription.findFirst({
+    const sub = await prisma.subscription.findFirst({
       where: {
         userId,
         type: 'PRO',
         isActive: true,
-        OR: [
-          { endDate: null },
-          { endDate: { gt: new Date() } }
-        ]
+        OR: [{ endDate: null }, { endDate: { gt: new Date() } }]
       }
     });
-    return !!subscription;
+    return !!sub;
   }
 
   async getSubscriptionInfo(userId) {
-    const subscription = await prisma.subscription.findFirst({
+    const sub = await prisma.subscription.findFirst({
       where: { userId, isActive: true },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { startDate: 'desc' }  // <-- ИСПРАВЛЕНО ЗДЕСЬ
     });
 
-    if (!subscription) {
+    if (!sub) {
       return { type: 'FREE', status: 'inactive' };
     }
 
-    const daysLeft = subscription.endDate 
-      ? Math.ceil((subscription.endDate - new Date()) / (1000 * 60 * 60 * 24))
+    const daysLeft = sub.endDate 
+      ? Math.ceil((sub.endDate - new Date()) / (1000 * 60 * 60 * 24))
       : null;
 
     return {
-      type: subscription.type,
-      status: subscription.isActive ? 'active' : 'inactive',
-      endDate: subscription.endDate,
+      type: sub.type,
+      status: sub.isActive ? 'active' : 'inactive',
+      endDate: sub.endDate,
       daysLeft: daysLeft > 0 ? daysLeft : 0
     };
   }
