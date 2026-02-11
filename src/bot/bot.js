@@ -394,7 +394,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 8. Команда /buy (Покупка PRO) - НОВАЯ
+    // 8. Команда /buy (Покупка PRO) - ИСПРАВЛЕННАЯ (убран @admin)
     this.bot.onText(/\/buy|Купить PRO/, async (msg) => {
       const chatId = msg.chat.id;
       
@@ -402,7 +402,7 @@ export class MarketplaceBot {
         '<b>7 дней</b> — $3\n' +
         '<b>30 дней</b> — $9 (выгода 25%)\n' +
         '<b>90 дней</b> — $24 (выгода 33%)\n\n' +
-        '💡 Для оплаты свяжитесь с администратором: @admin';
+        '💡 После выбора срока администратор получит уведомление и свяжется с вами для оплаты.';
 
       await this.bot.sendMessage(chatId, message, {
         parse_mode: 'HTML',
@@ -416,7 +416,7 @@ export class MarketplaceBot {
       });
     });
 
-    // 9. Команда /admin (Админ панель) - ИСПРАВЛЕНО: проверка через ADMIN_IDS
+    // 9. Команда /admin (Админ панель)
     this.bot.onText(/\/admin|🔧 Админ панель/, async (msg) => {
       const chatId = msg.chat.id;
       
@@ -449,7 +449,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 10. Команда /grant (быстрая выдача PRO админом) - НОВАЯ
+    // 10. Команда /grant (быстрая выдача PRO админом)
     this.bot.onText(/\/grant (\d+) (\d+)/, async (msg, match) => {
       const chatId = msg.chat.id;
       
@@ -487,7 +487,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 11. Обработка inline кнопок (callback_query)
+    // 11. Обработка inline кнопок (callback_query) - ИСПРАВЛЕННАЯ
     this.bot.on('callback_query', async (query) => {
       const chatId = query.message.chat.id;
       const data = query.data;
@@ -586,8 +586,30 @@ export class MarketplaceBot {
         }
       }
 
-      // Запрос на покупку PRO
-      if (data.startsWith('buy_pro_')) {
+      // ИСПРАВЛЕНО: Обработка кнопки "Купить PRO" (без указания срока)
+      if (data === 'buy_pro') {
+        await this.bot.answerCallbackQuery(query.id);
+        
+        const message = '💳 <b>Выберите срок подписки PRO:</b>\n\n' +
+          '<b>7 дней</b> — $3\n' +
+          '<b>30 дней</b> — $9 (выгода 25%)\n' +
+          '<b>90 дней</b> — $24 (выгода 33%)\n\n' +
+          '💡 После выбора администратор получит уведомление и свяжется с вами для оплаты.';
+
+        await this.bot.sendMessage(chatId, message, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '7 дней — $3', callback_data: 'buy_pro_7' }],
+              [{ text: '30 дней — $9', callback_data: 'buy_pro_30' }],
+              [{ text: '90 дней — $24', callback_data: 'buy_pro_90' }]
+            ]
+          }
+        });
+      }
+
+      // Запрос на покупку PRO (конкретный срок) - ИСПРАВЛЕННЫЙ ТЕКСТ (убран @admin)
+      if (data.startsWith('buy_pro_') && data !== 'buy_pro') {
         const days = data.replace('buy_pro_', '');
         await this.bot.answerCallbackQuery(query.id);
         
