@@ -20,7 +20,7 @@ export class SubscriptionService {
   async getSubscriptionInfo(userId) {
     const sub = await prisma.subscription.findFirst({
       where: { userId, isActive: true },
-      orderBy: { startDate: 'desc' }  // <-- ИСПРАВЛЕНО ЗДЕСЬ
+      orderBy: { startDate: 'desc' }
     });
 
     if (!sub) {
@@ -37,6 +37,36 @@ export class SubscriptionService {
       endDate: sub.endDate,
       daysLeft: daysLeft > 0 ? daysLeft : 0
     };
+  }
+
+  // Выдача PRO подписки (для админа) - НОВЫЙ МЕТОД
+  async grantPro(userId, days = 30) {
+    try {
+      // Деактивируем текущие подписки
+      await prisma.subscription.updateMany({
+        where: { userId, isActive: true },
+        data: { isActive: false }
+      });
+
+      // Создаем новую PRO подписку
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + days);
+
+      const subscription = await prisma.subscription.create({
+        data: {
+          userId,
+          type: 'PRO',
+          endDate,
+          isActive: true,
+        }
+      });
+
+      logger.info(`PRO granted to user ${userId} until ${endDate}`);
+      return subscription;
+    } catch (error) {
+      logger.error('Grant PRO error: ' + error.message);
+      throw error;
+    }
   }
 }
 
