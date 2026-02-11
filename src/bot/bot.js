@@ -161,8 +161,8 @@ export class MarketplaceBot {
           message += `Осталось: ${subInfo.daysLeft} дней\n`;
         }
         
-        // Проверяем админ ли для добавления кнопки админки
-        const isAdmin = await userService.isAdmin(user.id);
+        // Проверяем админ ли для добавления кнопки админки (через ADMIN_IDS в .env)
+        const isAdmin = config.bot.adminIds.includes(String(msg.from.id));
         const keyboard = [
           [{ text: '🏪 Добавить магазин' }, { text: '📊 Мои заказы' }],
           [{ text: '💎 Подписка' }]
@@ -365,17 +365,16 @@ export class MarketplaceBot {
       }
     });
 
-    // 8. Команда /admin (Админ панель) - НОВОЕ
+    // 8. Команда /admin (Админ панель) - ИСПРАВЛЕНО: проверка через ADMIN_IDS
     this.bot.onText(/\/admin|🔧 Админ панель/, async (msg) => {
       const chatId = msg.chat.id;
       
-      try {
-        const user = await userService.getUserByTelegramId(msg.from.id);
-        
-        if (!await userService.isAdmin(user.id)) {
-          return this.bot.sendMessage(chatId, '⛔ У вас нет доступа к админ-панели');
-        }
+      // Проверка через ADMIN_IDS в .env (а не через базу данных)
+      if (!config.bot.adminIds.includes(String(msg.from.id))) {
+        return this.bot.sendMessage(chatId, '⛔ У вас нет доступа к админ-панели');
+      }
 
+      try {
         const stats = await userService.getUserStats();
         
         let message = '🔧 <b>Админ панель</b>\n\n';
