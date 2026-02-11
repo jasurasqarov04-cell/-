@@ -59,7 +59,7 @@ export class MarketplaceBot {
   }
 
   setupHandlers() {
-    // 1. Обработка текстовых сообщений (API ключи и т.д.) - в начале!
+    // 1. Обработка текстовых сообщений (API ключи и т.д.)
     this.bot.on('message', async (msg) => {
       if (!msg.text || msg.text.startsWith('/')) return;
       
@@ -171,7 +171,51 @@ export class MarketplaceBot {
       }
     });
 
-    // 4. Команда /sub (Подписка)
+    // 4. Команда /mystores (список магазинов) - НОВОЕ
+    this.bot.onText(/\/mystores|Мои магазины/, async (msg) => {
+      const chatId = msg.chat.id;
+      try {
+        const user = await userService.getUserByTelegramId(msg.from.id);
+        const { marketplaceService } = await import('../modules/marketplaces/marketplace.service.js');
+        const stores = await marketplaceService.getByUser(user.id);
+        
+        if (stores.length === 0) {
+          return this.bot.sendMessage(chatId,
+            '🏪 У вас пока нет добавленных магазинов.\n\n' +
+            'Добавьте первый: /addmarket',
+            { parse_mode: 'HTML' }
+          );
+        }
+        
+        let message = '🏪 <b>Ваши магазины:</b>\n\n';
+        const keyboard = [];
+        
+        stores.forEach((store, index) => {
+          const status = store.isActive ? '✅' : '❌';
+          message += `${index + 1}. ${status} <b>${store.name}</b>\n`;
+          message += `   Добавлен: ${store.createdAt.toLocaleDateString('ru-RU')}\n\n`;
+          
+          keyboard.push([{ 
+            text: `🗑 Удалить ${store.name}`, 
+            callback_data: `delete_store_${store.id}` 
+          }]);
+        });
+        
+        message += `\n💡 Всего: ${stores.length} магазин(ов)`;
+        
+        await this.bot.sendMessage(chatId, message, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: keyboard
+          }
+        });
+      } catch (err) {
+        logger.error('Mystores error: ' + err.message);
+        await this.bot.sendMessage(chatId, '❌ Ошибка получения списка');
+      }
+    });
+
+    // 5. Команда /sub (Подписка)
     this.bot.onText(/Подписка|\/sub/, async (msg) => {
       const chatId = msg.chat.id;
       try {
@@ -191,11 +235,12 @@ export class MarketplaceBot {
       }
     });
 
-    // 5. Обработка inline кнопок (callback_query)
+    // 6. Обработка inline кнопок (callback_query)
     this.bot.on('callback_query', async (query) => {
       const chatId = query.message.chat.id;
       const data = query.data;
       
+      // Выбор маркетплейса для добавления
       if (data.startsWith('market_')) {
         const market = data.replace('market_', '').toUpperCase();
         await this.bot.answerCallbackQuery(query.id);
@@ -208,6 +253,23 @@ export class MarketplaceBot {
           `Пример: 123456789|secret123`,
           { parse_mode: 'HTML' }
         );
+      }
+      
+      // Удаление магазина - НОВОЕ
+      if (data.startsWith('delete_store_')) {
+        const storeId = data.replace('delete_store_', '');
+        await this.bot.answerCallbackQuery(query.id);
+        
+        try {
+          const user = await userService.getUserByTelegramId(query.from.id);
+          const { marketplaceService } = await import('../modules/marketplaces/marketplace.service.js');
+          await marketplaceService.delete(storeId, user.id);
+          
+          await this.bot.sendMessage(chatId, '✅ Магазин успешно удален!\n\nОбновите список: /mystores');
+        } catch (err) {
+          logger.error('Delete store error: ' + err.message);
+          await this.bot.sendMessage(chatId, '❌ Ошибка удаления магазина');
+        }
       }
     });
   }
