@@ -98,7 +98,16 @@ export class UserService {
     });
     return { total, pro, free: total - pro };
   }
+
+  // ДЛЯ РАССЫЛКИ ВСЕМ ПОЛЬЗОВАТЕЛЯМ
+  async getAllUsersForBroadcast() {
+    return prisma.user.findMany({
+      select: {
+        telegramId: true,
+        username: true
+      }
+    });
+  }
 }
 
-// ВОТ ЭТО СТРОКА БЫЛА ОБРЕЗАНА:
-export const userService = new UserService();
+export const user
