@@ -104,6 +104,82 @@ export class MarketplaceBot {
         }
         return;
       }
+
+      // ОТЗЫВ PRO (ввод ID для отзыва)
+      if (tempData?.action === 'revoke_pro') {
+        const targetId = msg.text.trim();
+        
+        try {
+          const targetUser = await userService.getUserByTelegramId(targetId);
+          if (!targetUser) {
+            return this.bot.sendMessage(chatId, '❌ Пользователь не найден');
+          }
+
+          // Проверяем есть ли активная подписка
+          const hasPro = await subscriptionService.hasActivePro(targetUser.id);
+          if (!hasPro) {
+            return this.bot.sendMessage(chatId, '❌ У пользователя нет активной PRO подписки');
+          }
+
+          await subscriptionService.revokePro(targetUser.id);
+          await userService.clearTempData(msg.from.id);
+          
+          await this.bot.sendMessage(chatId, 
+            `✅ PRO отозван у пользователя @${targetUser.username || targetId}`
+          );
+          
+          // Уведомляем пользователя
+          try {
+            await this.bot.sendMessage(targetId, 
+              `⚠️ <b>Ваш PRO доступ деактивирован</b>\n\n` +
+              `Ваш тариф изменен на FREE.\n` +
+              `Ограничения:\n` +
+              `• Макс. 1 магазин\n` +
+              `• 50 заказов в день\n\n` +
+              `Для возобновления: /sub`,
+              { parse_mode: 'HTML' }
+            );
+          } catch (notifyErr) {
+            logger.error('Failed to notify user about revoke: ' + notifyErr.message);
+          }
+        } catch (err) {
+          logger.error('Revoke error:', err);
+          await this.bot.sendMessage(chatId, '❌ Ошибка отзыва PRO: ' + err.message);
+        }
+        return;
+      }
+
+      // РАССЫЛКА: Ввод текста сообщения
+      if (tempData?.action === 'broadcast_text') {
+        const broadcastText = msg.text;
+        
+        // Сохраняем текст и ждем фото (или подтверждение без фото)
+        await userService.setTempData(msg.from.id, { 
+          action: 'broadcast_photo', 
+          text: broadcastText 
+        });
+        
+        const confirmKeyboard = {
+          inline_keyboard: [
+            [{ text: '📷 Прикрепить фото', callback_data: 'broadcast_attach_photo' }],
+            [{ text: '▶️ Отправить без фото', callback_data: 'broadcast_send_text_only' }],
+            [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
+          ]
+        };
+        
+        await this.bot.sendMessage(chatId,
+          `📝 <b>Текст рассылки:</b>\n\n${broadcastText}\n\n` +
+          `Хотите добавить изображение или отправить только текст?`,
+          { parse_mode: 'HTML', reply_markup: confirmKeyboard }
+        );
+        return;
+      }
+
+      // РАССЫЛКА: Ввод ID для отзыва через команду (альтернатива кнопке)
+      if (tempData?.action === 'revoke_pro_input') {
+        // Обработка выше уже покрывает это через msg.text
+        return;
+      }
       
       // Добавление API ключа для магазина
       if (tempData?.action === 'add_api') {
@@ -144,6 +220,32 @@ export class MarketplaceBot {
       }
     });
 
+    // Обработка фото для рассылки
+    this.bot.on('photo', async (msg) => {
+      const chatId = msg.chat.id;
+      const tempData = await userService.getTempData(msg.from.id);
+      
+      if (tempData?.action === 'broadcast_photo') {
+        // Берем фото максимального размера
+        const photo = msg.photo[msg.photo.length - 1];
+        const caption = tempData.text;
+        
+        // Показываем превью перед отправкой
+        const confirmKeyboard = {
+          inline_keyboard: [
+            [{ text: '✅ Подтвердить рассылку', callback_data: `broadcast_confirm_with_photo_${photo.file_id}` }],
+            [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
+          ]
+        };
+        
+        await this.bot.sendPhoto(chatId, photo.file_id, {
+          caption: `📢 <b>Превью рассылки:</b>\n\n${caption}`,
+          parse_mode: 'HTML',
+          reply_markup: confirmKeyboard
+        });
+      }
+    });
+
     // 2. Команда /start
     this.bot.onText(/\/start/, async (msg) => {
       const chatId = msg.chat.id;
@@ -161,14 +263,12 @@ export class MarketplaceBot {
           message += `Осталось: ${subInfo.daysLeft} дней\n`;
         }
         
-        // Проверяем админ ли для добавления кнопки админки (через ADMIN_IDS в .env)
         const isAdmin = config.bot.adminIds.includes(String(msg.from.id));
         const keyboard = [
           [{ text: '🏪 Добавить магазин' }, { text: '📊 Мои заказы' }],
           [{ text: '💎 Подписка' }]
         ];
         
-        // Добавляем кнопку админки если админ
         if (isAdmin) {
           keyboard.push([{ text: '🔧 Админ панель' }]);
         }
@@ -283,7 +383,6 @@ export class MarketplaceBot {
         const { orderService } = await import('../modules/orders/order.service.js');
         let totalSynced = 0;
         
-        // Синхронизируем все магазины
         for (const marketplace of user.marketplaces) {
           try {
             const result = await orderService.syncOrders(user.id, marketplace.id);
@@ -345,7 +444,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 7. Команда /sub (Подписка) - УЛУЧШЕННАЯ
+    // 7. Команда /sub (Подписка)
     this.bot.onText(/Подписка|\/sub/, async (msg) => {
       const chatId = msg.chat.id;
       try {
@@ -380,7 +479,6 @@ export class MarketplaceBot {
           ]
         };
 
-        // Если админ, добавляем кнопку выдачи
         if (config.bot.adminIds.includes(String(msg.from.id))) {
           keyboard.inline_keyboard.push([{ text: '⚡ Выдать PRO (админ)', callback_data: 'admin_grant_pro' }]);
         }
@@ -394,7 +492,7 @@ export class MarketplaceBot {
       }
     });
 
-    // 8. Команда /buy (Покупка PRO) - ИСПРАВЛЕННАЯ (убран @admin)
+    // 8. Команда /buy (Покупка PRO)
     this.bot.onText(/\/buy|Купить PRO/, async (msg) => {
       const chatId = msg.chat.id;
       
@@ -402,7 +500,7 @@ export class MarketplaceBot {
         '<b>7 дней</b> — $3\n' +
         '<b>30 дней</b> — $9 (выгода 25%)\n' +
         '<b>90 дней</b> — $24 (выгода 33%)\n\n' +
-        '💡 После выбора срока администратор получит уведомление и свяжется с вами для оплаты.';
+        '💡 После выбора администратор получит уведомление и свяжется с вами для оплаты.';
 
       await this.bot.sendMessage(chatId, message, {
         parse_mode: 'HTML',
@@ -416,11 +514,10 @@ export class MarketplaceBot {
       });
     });
 
-    // 9. Команда /admin (Админ панель)
+    // 9. Команда /admin (Админ панель) - ОБНОВЛЕННАЯ
     this.bot.onText(/\/admin|🔧 Админ панель/, async (msg) => {
       const chatId = msg.chat.id;
       
-      // Проверка через ADMIN_IDS в .env (а не через базу данных)
       if (!config.bot.adminIds.includes(String(msg.from.id))) {
         return this.bot.sendMessage(chatId, '⛔ У вас нет доступа к админ-панели');
       }
@@ -439,7 +536,9 @@ export class MarketplaceBot {
           reply_markup: {
             inline_keyboard: [
               [{ text: '👥 Список пользователей', callback_data: 'admin_users' }],
-              [{ text: '⚡ Выдать PRO', callback_data: 'admin_grant_pro' }]
+              [{ text: '⚡ Выдать PRO', callback_data: 'admin_grant_pro' }],
+              [{ text: '🚫 Отозвать PRO', callback_data: 'admin_revoke_pro' }],
+              [{ text: '📢 Рассылка всем', callback_data: 'admin_broadcast' }]
             ]
           }
         });
@@ -453,7 +552,6 @@ export class MarketplaceBot {
     this.bot.onText(/\/grant (\d+) (\d+)/, async (msg, match) => {
       const chatId = msg.chat.id;
       
-      // Проверка админ
       if (!config.bot.adminIds.includes(String(msg.from.id))) {
         return;
       }
@@ -469,11 +567,19 @@ export class MarketplaceBot {
         
         await subscriptionService.grantPro(targetUser.id, days);
         
+        const userLink = `tg://user?id=${targetId}`;
+        const displayName = targetUser.username 
+          ? `@${targetUser.username}` 
+          : `ID: ${targetId}`;
+        
         await this.bot.sendMessage(chatId, 
-          `✅ PRO выдан!\n\nПользователь: @${targetUser.username || targetId}\nСрок: ${days} дней`
+          `✅ PRO выдан!\n\n` +
+          `Пользователь: <a href="${userLink}">${displayName}</a>\n` +
+          `Telegram ID: <code>${targetId}</code>\n` +
+          `Срок: ${days} дней`,
+          { parse_mode: 'HTML' }
         );
         
-        // Уведомляем пользователя
         await this.bot.sendMessage(targetId,
           `🎉 <b>Вам выдан доступ PRO!</b>\n\n` +
           `Срок: ${days} дней\n` +
@@ -487,7 +593,49 @@ export class MarketplaceBot {
       }
     });
 
-    // 11. Обработка inline кнопок (callback_query) - ИСПРАВЛЕННАЯ
+    // КОМАНДА ОТЗЫВА PRO (/revoke)
+    this.bot.onText(/\/revoke (\d+)/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      
+      if (!config.bot.adminIds.includes(String(msg.from.id))) {
+        return;
+      }
+      
+      const targetId = match[1];
+      
+      try {
+        const targetUser = await userService.getUserByTelegramId(targetId);
+        if (!targetUser) {
+          return this.bot.sendMessage(chatId, '❌ Пользователь не найден');
+        }
+
+        const hasPro = await subscriptionService.hasActivePro(targetUser.id);
+        if (!hasPro) {
+          return this.bot.sendMessage(chatId, '❌ У пользователя нет активной PRO подписки');
+        }
+
+        await subscriptionService.revokePro(targetUser.id);
+        
+        await this.bot.sendMessage(chatId, 
+          `✅ PRO отозван у пользователя @${targetUser.username || targetId}`
+        );
+        
+        await this.bot.sendMessage(targetId,
+          `⚠️ <b>Ваш PRO доступ деактивирован</b>\n\n` +
+          `Ваш тариф изменен на FREE.\n` +
+          `Ограничения:\n` +
+          `• Макс. 1 магазин\n` +
+          `• 50 заказов в день\n\n` +
+          `Для возобновления: /sub`,
+          { parse_mode: 'HTML' }
+        );
+      } catch (err) {
+        logger.error('Revoke command error:', err.message);
+        await this.bot.sendMessage(chatId, '❌ Ошибка отзыва');
+      }
+    });
+
+    // 11. Обработка inline кнопок (callback_query) - ОБНОВЛЕННАЯ
     this.bot.on('callback_query', async (query) => {
       const chatId = query.message.chat.id;
       const data = query.data;
@@ -556,6 +704,99 @@ export class MarketplaceBot {
         );
       }
 
+      // Админ: отозвать PRO (запрос ID)
+      if (data === 'admin_revoke_pro') {
+        await this.bot.answerCallbackQuery(query.id);
+        await userService.setTempData(query.from.id, { action: 'revoke_pro' });
+        await this.bot.sendMessage(chatId, 
+          '🚫 Введите Telegram ID пользователя для отзыва PRO:\n\n' +
+          'Пример: 123456789\n\n' +
+          '⚠️ Пользователь получит уведомление о деактивации',
+          { parse_mode: 'HTML' }
+        );
+      }
+
+      // Админ: рассылка (начало)
+      if (data === 'admin_broadcast') {
+        await this.bot.answerCallbackQuery(query.id);
+        await userService.setTempData(query.from.id, { action: 'broadcast_text' });
+        await this.bot.sendMessage(chatId, 
+          '📢 <b>Создание рассылки</b>\n\n' +
+          'Введите текст сообщения для всех пользователей:\n\n' +
+          'Поддерживается HTML разметка (b, i, code и т.д.)\n\n' +
+          '❌ Для отмены введите /cancel',
+          { parse_mode: 'HTML' }
+        );
+      }
+
+      // Рассылка: отмена
+      if (data === 'broadcast_cancel' || data === 'broadcast_cancel_final') {
+        await this.bot.answerCallbackQuery(query.id);
+        await userService.clearTempData(query.from.id);
+        await this.bot.sendMessage(chatId, '❌ Рассылка отменена');
+      }
+
+      // Рассылка: прикрепить фото
+      if (data === 'broadcast_attach_photo') {
+        await this.bot.answerCallbackQuery(query.id, { text: 'Отправьте фото' });
+        // Состояние уже broadcast_photo, просто напоминаем
+        await this.bot.sendMessage(chatId, 
+          '📷 Отправьте изображение (фото, не файл)\n\n' +
+          'Бот использует его как обложку для рассылки'
+        );
+      }
+
+      // Рассылка: отправить только текст
+      if (data === 'broadcast_send_text_only') {
+        await this.bot.answerCallbackQuery(query.id);
+        const tempData = await userService.getTempData(query.from.id);
+        
+        if (!tempData?.text) {
+          return this.bot.sendMessage(chatId, '❌ Ошибка: текст не найден');
+        }
+
+        // Подтверждение
+        const confirmKeyboard = {
+          inline_keyboard: [
+            [{ text: '✅ Подтвердить рассылку', callback_data: 'broadcast_confirm_text_only' }],
+            [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
+          ]
+        };
+
+        await this.bot.sendMessage(chatId,
+          `📢 <b>Превью рассылки (только текст):</b>\n\n${tempData.text}\n\n` +
+          `Отправить всем пользователям?`,
+          { parse_mode: 'HTML', reply_markup: confirmKeyboard }
+        );
+      }
+
+      // Рассылка: подтверждение с фото
+      if (data.startsWith('broadcast_confirm_with_photo_')) {
+        await this.bot.answerCallbackQuery(query.id, { text: 'Начинаю рассылку...' });
+        const photoId = data.replace('broadcast_confirm_with_photo_', '');
+        const tempData = await userService.getTempData(query.from.id);
+        
+        if (!tempData?.text) {
+          return this.bot.sendMessage(chatId, '❌ Ошибка: данные не найдены');
+        }
+
+        await this.executeBroadcast(chatId, tempData.text, photoId);
+        await userService.clearTempData(query.from.id);
+      }
+
+      // Рассылка: подтверждение текста
+      if (data === 'broadcast_confirm_text_only') {
+        await this.bot.answerCallbackQuery(query.id, { text: 'Начинаю рассылку...' });
+        const tempData = await userService.getTempData(query.from.id);
+        
+        if (!tempData?.text) {
+          return this.bot.sendMessage(chatId, '❌ Ошибка: текст не найден');
+        }
+
+        await this.executeBroadcast(chatId, tempData.text, null);
+        await userService.clearTempData(query.from.id);
+      }
+
       // Пробный PRO (1 день) - автовыдача
       if (data === 'trial_pro') {
         await this.bot.answerCallbackQuery(query.id);
@@ -563,13 +804,11 @@ export class MarketplaceBot {
         try {
           const user = await userService.getUserByTelegramId(query.from.id);
           
-          // Проверяем не брал ли уже пробный
           const hasPro = await subscriptionService.hasActivePro(user.id);
           if (hasPro) {
             return this.bot.sendMessage(chatId, '❌ У вас уже активна PRO подписка!');
           }
 
-          // Выдаем пробный на 1 день
           await subscriptionService.grantPro(user.id, 1);
           
           await this.bot.sendMessage(chatId,
@@ -586,7 +825,7 @@ export class MarketplaceBot {
         }
       }
 
-      // ИСПРАВЛЕНО: Обработка кнопки "Купить PRO" (без указания срока)
+      // Кнопка "Купить PRO" (показать тарифы)
       if (data === 'buy_pro') {
         await this.bot.answerCallbackQuery(query.id);
         
@@ -608,23 +847,44 @@ export class MarketplaceBot {
         });
       }
 
-      // Запрос на покупку PRO (конкретный срок) - ИСПРАВЛЕННЫЙ ТЕКСТ (убран @admin)
+      // Запрос на покупку PRO
       if (data.startsWith('buy_pro_') && data !== 'buy_pro') {
         const days = data.replace('buy_pro_', '');
         await this.bot.answerCallbackQuery(query.id);
         
-        // Отправляем уведомление админу
         const user = await userService.getUserByTelegramId(query.from.id);
-        const adminMsg = `💳 <b>Новый запрос на PRO!</b>\n\n` +
-          `Пользователь: @${user.username || user.telegramId}\n` +
-          `ID: ${user.telegramId}\n` +
-          `Тариф: ${days} дней\n\n` +
-          `Для выдачи отправь:\n/grant ${user.telegramId} ${days}`;
+        const userName = user.firstName 
+          ? `${user.firstName} ${user.lastName || ''}`.trim()
+          : (user.username || `ID: ${user.telegramId}`);
+        const userLink = `tg://user?id=${user.telegramId}`;
         
-        // Отправляем всем админам
+        const adminMsg = `💳 <b>Новый запрос на PRO!</b>\n\n` +
+          `👤 <b>Пользователь:</b> <a href="${userLink}">${userName}</a>\n` +
+          `🆔 <b>ID:</b> <code>${user.telegramId}</code>\n` +
+          `⏱ <b>Тариф:</b> ${days} дней\n\n` +
+          `🔗 <a href="${userLink}">Открыть профиль</a>\n\n` +
+          `Для выдачи отправь:\n` +
+          `<code>/grant ${user.telegramId} ${days}</code>`;
+        
+        const adminKeyboard = {
+          inline_keyboard: [
+            [{ 
+              text: '✅ Выдать PRO', 
+              callback_data: `quick_grant_${user.telegramId}_${days}` 
+            }],
+            [{
+              text: '💬 Написать пользователю',
+              url: userLink
+            }]
+          ]
+        };
+        
         for (const adminId of config.bot.adminIds) {
           try {
-            await this.bot.sendMessage(adminId, adminMsg, { parse_mode: 'HTML' });
+            await this.bot.sendMessage(adminId, adminMsg, { 
+              parse_mode: 'HTML',
+              reply_markup: adminKeyboard
+            });
           } catch (err) {
             logger.error('Failed to notify admin:', err.message);
           }
@@ -632,11 +892,133 @@ export class MarketplaceBot {
         
         await this.bot.sendMessage(chatId,
           '✅ <b>Заявка отправлена!</b>\n\n' +
-          'Администратор получил уведомление и скоро активирует ваш PRO доступ.\n\n' +
-          '⏳ Обычно это занимает 10-30 минут.',
+          'Администратор получил уведомление.\n' +
+          'Если у вас есть вопросы, напишите нам.\n\n' +
+          '⏳ Обычно активация занимает 10-30 минут.',
           { parse_mode: 'HTML' }
         );
       }
+
+      // Быстрая выдача через кнопку
+      if (data.startsWith('quick_grant_')) {
+        const parts = data.split('_');
+        const targetId = parts[2];
+        const days = parts[3];
+        
+        if (!config.bot.adminIds.includes(String(query.from.id))) {
+          return this.bot.answerCallbackQuery(query.id, { text: '⛔ Нет доступа' });
+        }
+        
+        await this.bot.answerCallbackQuery(query.id, { text: 'Выдаю PRO...' });
+        
+        try {
+          const targetUser = await userService.getUserByTelegramId(targetId);
+          if (!targetUser) {
+            return this.bot.sendMessage(chatId, '❌ Пользователь не найден');
+          }
+          
+          await subscriptionService.grantPro(targetUser.id, parseInt(days));
+          
+          await this.bot.editMessageText(
+            `✅ <b>PRO успешно выдан!</b>\n\n` +
+            `Пользователь: ${targetUser.username || targetId}\n` +
+            `Срок: ${days} дней`,
+            {
+              chat_id: chatId,
+              message_id: query.message.message_id,
+              parse_mode: 'HTML'
+            }
+          );
+          
+          await this.bot.sendMessage(targetId,
+            `🎉 <b>Ваш PRO доступ активирован!</b>\n\n` +
+            `⏳ Срок: ${days} дней\n` +
+            `✅ Все функции разблокированы\n\n` +
+            `Перейдите в профиль: /sub`,
+            { parse_mode: 'HTML' }
+          );
+          
+        } catch (err) {
+          logger.error('Quick grant error:', err.message);
+          await this.bot.sendMessage(chatId, '❌ Ошибка выдачи: ' + err.message);
+        }
+      }
     });
+  }
+
+  // Вспомогательный метод для выполнения рассылки
+  async executeBroadcast(adminChatId, text, photoId) {
+    try {
+      const users = await userService.getAllUsersForBroadcast();
+      const total = users.length;
+      let success = 0;
+      let failed = 0;
+      
+      // Отправляем статус админу
+      const statusMsg = await this.bot.sendMessage(adminChatId, 
+        `📤 <b>Рассылка начата...</b>\n\n` +
+        `Всего пользователей: ${total}\n` +
+        `Отправлено: 0\n` +
+        `Ошибок: 0`,
+        { parse_mode: 'HTML' }
+      );
+
+      // Рассылка с задержкой (30 сообщений в секунду ~ 1 каждые 34мс, но лучше 100мс для надежности)
+      for (let i = 0; i < users.length; i++) {
+        const user = users[i];
+        try {
+          if (photoId) {
+            await this.bot.sendPhoto(user.telegramId, photoId, {
+              caption: text,
+              parse_mode: 'HTML'
+            });
+          } else {
+            await this.bot.sendMessage(user.telegramId, text, { parse_mode: 'HTML' });
+          }
+          success++;
+        } catch (err) {
+          failed++;
+          logger.error(`Broadcast failed for ${user.telegramId}:`, err.message);
+        }
+
+        // Обновляем статус каждые 10 пользователей
+        if ((i + 1) % 10 === 0 || i === users.length - 1) {
+          try {
+            await this.bot.editMessageText(
+              `📤 <b>Рассылка выполняется...</b>\n\n` +
+              `Всего: ${total}\n` +
+              `✅ Отправлено: ${success}\n` +
+              `❌ Ошибок: ${failed}\n` +
+              `⏳ Прогресс: ${Math.round(((i + 1) / total) * 100)}%`,
+              {
+                chat_id: adminChatId,
+                message_id: statusMsg.message_id,
+                parse_mode: 'HTML'
+              }
+            );
+          } catch (e) {
+            // Игнорируем ошибки редактирования
+          }
+        }
+
+        // Задержка 50мс между сообщениями (~20 в секунду, безопасно для API)
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      // Итоговый отчет
+      await this.bot.sendMessage(adminChatId,
+        `✅ <b>Рассылка завершена!</b>\n\n` +
+        `📊 Статистика:\n` +
+        `• Всего пользователей: ${total}\n` +
+        `• Успешно: ${success}\n` +
+        `• Ошибок: ${failed}\n` +
+        `• Процент доставки: ${Math.round((success / total) * 100)}%`,
+        { parse_mode: 'HTML' }
+      );
+
+    } catch (err) {
+      logger.error('Broadcast error:', err);
+      await this.bot.sendMessage(adminChatId, '❌ Ошибка при выполнении рассылки: ' + err.message);
+    }
   }
 }
