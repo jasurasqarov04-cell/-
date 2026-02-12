@@ -55,6 +55,8 @@ export class MarketplaceBot {
       logger.info(`Webhook установлен: ${url}`);
     } catch (err) {
       logger.error('Ошибка webhook: ' + err.message);
+      logger.warn('Переключаюсь на polling режим...');
+      this.bot = new TelegramBot(config.bot.token, { polling: true });
     }
   }
 
@@ -143,26 +145,25 @@ export class MarketplaceBot {
         return;
       }
 
-      // РАССЫЛКА: Ввод текста
+      // РАССЫЛКА: Ввод текста (сразу подтверждение)
       if (tempData?.action === 'broadcast_text') {
         const broadcastText = msg.text;
         
-        await userService.setTempData(msg.from.id, { 
-          action: 'broadcast_photo', 
-          text: broadcastText 
-        });
-        
         const confirmKeyboard = {
           inline_keyboard: [
-            [{ text: '📷 Прикрепить фото/файл', callback_data: 'broadcast_attach_photo' }],
-            [{ text: '▶️ Отправить только текст', callback_data: 'broadcast_send_text_only' }],
+            [{ text: '✅ Отправить всем', callback_data: 'broadcast_confirm_text' }],
             [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
           ]
         };
         
+        await userService.setTempData(msg.from.id, { 
+          action: 'broadcast_pending', 
+          text: broadcastText 
+        });
+        
         await this.bot.sendMessage(chatId,
-          `📝 <b>Текст рассылки:</b>\n\n${broadcastText}\n\n` +
-          `Выберите действие:`,
+          `📢 <b>Превью рассылки:</b>\n\n${broadcastText}\n\n` +
+          `Отправить ${(await userService.getUserStats()).total} пользователям?`,
           { parse_mode: 'HTML', reply_markup: confirmKeyboard }
         );
         return;
@@ -201,52 +202,6 @@ export class MarketplaceBot {
           logger.error('Save marketplace error: ' + err.message);
           await this.bot.sendMessage(chatId, '❌ Ошибка сохранения: ' + err.message);
         }
-      }
-    });
-
-    // ОБРАБОТКА ФОТО (для рассылки)
-    this.bot.on('photo', async (msg) => {
-      const chatId = msg.chat.id;
-      const tempData = await userService.getTempData(msg.from.id);
-      
-      if (tempData?.action === 'broadcast_photo') {
-        const photo = msg.photo[msg.photo.length - 1];
-        
-        const confirmKeyboard = {
-          inline_keyboard: [
-            [{ text: '✅ Подтвердить рассылку', callback_data: `broadcast_confirm_with_photo_${photo.file_id}` }],
-            [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
-          ]
-        };
-        
-        await this.bot.sendPhoto(chatId, photo.file_id, {
-          caption: `📷 <b>Превью рассылки (фото):</b>\n\n${tempData.text}`,
-          parse_mode: 'HTML',
-          reply_markup: confirmKeyboard
-        });
-      }
-    });
-
-    // ОБРАБОТКА ДОКУМЕНТОВ (файлов) для рассылки
-    this.bot.on('document', async (msg) => {
-      const chatId = msg.chat.id;
-      const tempData = await userService.getTempData(msg.from.id);
-      
-      if (tempData?.action === 'broadcast_photo') {
-        const fileId = msg.document.file_id;
-        
-        const confirmKeyboard = {
-          inline_keyboard: [
-            [{ text: '✅ Подтвердить рассылку файла', callback_data: `broadcast_confirm_with_doc_${fileId}` }],
-            [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
-          ]
-        };
-        
-        await this.bot.sendDocument(chatId, fileId, {
-          caption: `📁 <b>Превью рассылки (файл):</b>\n\n${tempData.text}`,
-          parse_mode: 'HTML',
-          reply_markup: confirmKeyboard
-        });
       }
     });
 
@@ -629,11 +584,11 @@ export class MarketplaceBot {
         await this.bot.sendMessage(chatId, '🚫 Введите Telegram ID для отзыва PRO:\n\nПример: 123456789', { parse_mode: 'HTML' });
       }
 
-      // Админ: рассылка (начало) - ИСПРАВЛЕНО (msg -> query)
+      // Админ: рассылка (начало)
       if (data === 'admin_broadcast') {
         await this.bot.answerCallbackQuery(query.id);
         await userService.setTempData(query.from.id, { action: 'broadcast_text' });
-        await this.bot.sendMessage(chatId, '📢 Введите текст для рассылки всем пользователям:', { parse_mode: 'HTML' });
+        await this.bot.sendMessage(chatId, '📢 Введите текст для рассылки всем пользователям:\n\n❌ Для отмены введите /cancel', { parse_mode: 'HTML' });
       }
 
       // Рассылка: отмена
@@ -643,58 +598,16 @@ export class MarketplaceBot {
         await this.bot.sendMessage(chatId, '❌ Рассылка отменена');
       }
 
-      // Рассылка: прикрепить фото/файл
-      if (data === 'broadcast_attach_photo') {
-        await this.bot.answerCallbackQuery(query.id, { text: 'Отправьте фото или файл' });
-        await this.bot.sendMessage(chatId, '📷 Отправьте изображение или документ (файл)');
-      }
-
-      // Рассылка: отправить только текст
-      if (data === 'broadcast_send_text_only') {
-        await this.bot.answerCallbackQuery(query.id);
-        const tempData = await userService.getTempData(query.from.id);
-        if (!tempData?.text) return this.bot.sendMessage(chatId, '❌ Ошибка: текст не найден');
-
-        const confirmKeyboard = {
-          inline_keyboard: [
-            [{ text: '✅ Подтвердить', callback_data: 'broadcast_confirm_text_only' }],
-            [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
-          ]
-        };
-
-        await this.bot.sendMessage(chatId, `📢 <b>Превью:</b>\n\n${tempData.text}\n\nОтправить всем?`, { parse_mode: 'HTML', reply_markup: confirmKeyboard });
-      }
-
-      // Рассылка: подтверждение с фото
-      if (data.startsWith('broadcast_confirm_with_photo_')) {
-        await this.bot.answerCallbackQuery(query.id, { text: 'Начинаю рассылку фото...' });
-        const photoId = data.replace('broadcast_confirm_with_photo_', '');
-        const tempData = await userService.getTempData(query.from.id);
-        
-        if (!tempData?.text) return this.bot.sendMessage(chatId, '❌ Ошибка: данные не найдены');
-        
-        await this.executeBroadcast(chatId, tempData.text, photoId);
-        await userService.clearTempData(query.from.id);
-      }
-
-      // Рассылка: подтверждение с документом (файлом)
-      if (data.startsWith('broadcast_confirm_with_doc_')) {
-        await this.bot.answerCallbackQuery(query.id, { text: 'Начинаю рассылку файлов...' });
-        const fileId = data.replace('broadcast_confirm_with_doc_', '');
-        const tempData = await userService.getTempData(query.from.id);
-        
-        if (!tempData?.text) return this.bot.sendMessage(chatId, '❌ Ошибка: данные не найдены');
-        
-        await this.executeBroadcastDocument(chatId, tempData.text, fileId);
-        await userService.clearTempData(query.from.id);
-      }
-
-      // Рассылка: подтверждение текста
-      if (data === 'broadcast_confirm_text_only') {
+      // Рассылка: подтверждение и отправка (только текст)
+      if (data === 'broadcast_confirm_text') {
         await this.bot.answerCallbackQuery(query.id, { text: 'Начинаю рассылку...' });
         const tempData = await userService.getTempData(query.from.id);
-        if (!tempData?.text) return this.bot.sendMessage(chatId, '❌ Ошибка');
-        await this.executeBroadcast(chatId, tempData.text, null);
+        
+        if (!tempData?.text) {
+          return this.bot.sendMessage(chatId, '❌ Ошибка: текст не найден');
+        }
+
+        await this.executeBroadcast(chatId, tempData.text);
         await userService.clearTempData(query.from.id);
       }
 
@@ -783,8 +696,8 @@ export class MarketplaceBot {
     });
   }
 
-  // Метод рассылки фото
-  async executeBroadcast(adminChatId, text, photoId) {
+  // Метод рассылки (только текст)
+  async executeBroadcast(adminChatId, text) {
     try {
       const users = await userService.getAllUsersForBroadcast();
       const total = users.length;
@@ -799,11 +712,7 @@ export class MarketplaceBot {
       for (let i = 0; i < users.length; i++) {
         const user = users[i];
         try {
-          if (photoId) {
-            await this.bot.sendPhoto(user.telegramId, photoId, { caption: text, parse_mode: 'HTML' });
-          } else {
-            await this.bot.sendMessage(user.telegramId, text, { parse_mode: 'HTML' });
-          }
+          await this.bot.sendMessage(user.telegramId, text, { parse_mode: 'HTML' });
           success++;
         } catch (err) {
           failed++;
@@ -827,53 +736,6 @@ export class MarketplaceBot {
       );
     } catch (err) {
       logger.error('Broadcast error:', err);
-      await this.bot.sendMessage(adminChatId, '❌ Ошибка рассылки: ' + err.message);
-    }
-  }
-
-  // Метод рассылки документов (файлов)
-  async executeBroadcastDocument(adminChatId, text, fileId) {
-    try {
-      const users = await userService.getAllUsersForBroadcast();
-      const total = users.length;
-      let success = 0;
-      let failed = 0;
-      
-      const statusMsg = await this.bot.sendMessage(adminChatId, 
-        `📤 Рассылка файлов начата...\n\nВсего: ${total}\n✅: 0\n❌: 0`,
-        { parse_mode: 'HTML' }
-      );
-
-      for (let i = 0; i < users.length; i++) {
-        const user = users[i];
-        try {
-          await this.bot.sendDocument(user.telegramId, fileId, { 
-            caption: text, 
-            parse_mode: 'HTML' 
-          });
-          success++;
-        } catch (err) {
-          failed++;
-          logger.error(`Broadcast doc failed for ${user.telegramId}:`, err.message);
-        }
-
-        if ((i + 1) % 10 === 0 || i === users.length - 1) {
-          try {
-            await this.bot.editMessageText(
-              `📤 Рассылка файлов...\n\nВсего: ${total}\n✅: ${success}\n❌: ${failed}\n📊 ${Math.round(((i + 1) / total) * 100)}%`,
-              { chat_id: adminChatId, message_id: statusMsg.message_id }
-            );
-          } catch (e) {}
-        }
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-
-      await this.bot.sendMessage(adminChatId,
-        `✅ <b>Рассылка файлов завершена!</b>\n\n📊 Всего: ${total}\n✅ Успешно: ${success}\n❌ Ошибок: ${failed}`,
-        { parse_mode: 'HTML' }
-      );
-    } catch (err) {
-      logger.error('Broadcast document error:', err);
       await this.bot.sendMessage(adminChatId, '❌ Ошибка рассылки: ' + err.message);
     }
   }
