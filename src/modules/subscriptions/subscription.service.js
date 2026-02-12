@@ -39,6 +39,20 @@ export class SubscriptionService {
     };
   }
 
+  async revokePro(userId) {
+  // Удаляем активные подписки PRO (или меняем на FREE)
+  await prisma.subscription.deleteMany({
+    where: {
+      userId,
+      type: 'PRO',
+      endDate: { gt: new Date() }
+    }
+  });
+  
+  logger.info(`PRO revoked for user ${userId}`);
+  return { success: true };
+}
+  
   // Выдача PRO подписки (для админа) - НОВЫЙ МЕТОД
   async grantPro(userId, days = 30) {
     try {
@@ -71,3 +85,4 @@ export class SubscriptionService {
 }
 
 export const subscriptionService = new SubscriptionService();
+
