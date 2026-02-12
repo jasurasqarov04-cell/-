@@ -66,6 +66,12 @@ export class MarketplaceBot {
       const chatId = msg.chat.id;
       const tempData = await userService.getTempData(msg.from.id);
       
+      // Отмена действия
+      if (msg.text === '/cancel') {
+        await userService.clearTempData(msg.from.id);
+        return this.bot.sendMessage(chatId, '❌ Действие отменено');
+      }
+      
       // ВЫДАЧА PRO (ручной ввод)
       if (tempData?.action === 'grant_pro') {
         const [targetId, days] = msg.text.split(' ');
@@ -148,15 +154,15 @@ export class MarketplaceBot {
         
         const confirmKeyboard = {
           inline_keyboard: [
-            [{ text: '📷 Прикрепить фото', callback_data: 'broadcast_attach_photo' }],
-            [{ text: '▶️ Отправить без фото', callback_data: 'broadcast_send_text_only' }],
+            [{ text: '📷 Прикрепить фото/файл', callback_data: 'broadcast_attach_photo' }],
+            [{ text: '▶️ Отправить только текст', callback_data: 'broadcast_send_text_only' }],
             [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
           ]
         };
         
         await this.bot.sendMessage(chatId,
           `📝 <b>Текст рассылки:</b>\n\n${broadcastText}\n\n` +
-          `Хотите добавить изображение или отправить только текст?`,
+          `Выберите действие:`,
           { parse_mode: 'HTML', reply_markup: confirmKeyboard }
         );
         return;
@@ -214,7 +220,30 @@ export class MarketplaceBot {
         };
         
         await this.bot.sendPhoto(chatId, photo.file_id, {
-          caption: `📢 <b>Превью рассылки:</b>\n\n${tempData.text}`,
+          caption: `📷 <b>Превью рассылки (фото):</b>\n\n${tempData.text}`,
+          parse_mode: 'HTML',
+          reply_markup: confirmKeyboard
+        });
+      }
+    });
+
+    // ОБРАБОТКА ДОКУМЕНТОВ (файлов) для рассылки
+    this.bot.on('document', async (msg) => {
+      const chatId = msg.chat.id;
+      const tempData = await userService.getTempData(msg.from.id);
+      
+      if (tempData?.action === 'broadcast_photo') {
+        const fileId = msg.document.file_id;
+        
+        const confirmKeyboard = {
+          inline_keyboard: [
+            [{ text: '✅ Подтвердить рассылку файла', callback_data: `broadcast_confirm_with_doc_${fileId}` }],
+            [{ text: '❌ Отмена', callback_data: 'broadcast_cancel' }]
+          ]
+        };
+        
+        await this.bot.sendDocument(chatId, fileId, {
+          caption: `📁 <b>Превью рассылки (файл):</b>\n\n${tempData.text}`,
           parse_mode: 'HTML',
           reply_markup: confirmKeyboard
         });
@@ -600,7 +629,7 @@ export class MarketplaceBot {
         await this.bot.sendMessage(chatId, '🚫 Введите Telegram ID для отзыва PRO:\n\nПример: 123456789', { parse_mode: 'HTML' });
       }
 
-      // Админ: рассылка (начало)
+      // Админ: рассылка (начало) - ИСПРАВЛЕНО (msg -> query)
       if (data === 'admin_broadcast') {
         await this.bot.answerCallbackQuery(query.id);
         await userService.setTempData(query.from.id, { action: 'broadcast_text' });
@@ -614,10 +643,10 @@ export class MarketplaceBot {
         await this.bot.sendMessage(chatId, '❌ Рассылка отменена');
       }
 
-      // Рассылка: прикрепить фото
+      // Рассылка: прикрепить фото/файл
       if (data === 'broadcast_attach_photo') {
-        await this.bot.answerCallbackQuery(query.id, { text: 'Отправьте фото' });
-        await this.bot.sendMessage(chatId, '📷 Отправьте изображение (фото, не файл)');
+        await this.bot.answerCallbackQuery(query.id, { text: 'Отправьте фото или файл' });
+        await this.bot.sendMessage(chatId, '📷 Отправьте изображение или документ (файл)');
       }
 
       // Рассылка: отправить только текст
@@ -638,11 +667,25 @@ export class MarketplaceBot {
 
       // Рассылка: подтверждение с фото
       if (data.startsWith('broadcast_confirm_with_photo_')) {
-        await this.bot.answerCallbackQuery(query.id, { text: 'Начинаю рассылку...' });
+        await this.bot.answerCallbackQuery(query.id, { text: 'Начинаю рассылку фото...' });
         const photoId = data.replace('broadcast_confirm_with_photo_', '');
         const tempData = await userService.getTempData(query.from.id);
-        if (!tempData?.text) return this.bot.sendMessage(chatId, '❌ Ошибка');
+        
+        if (!tempData?.text) return this.bot.sendMessage(chatId, '❌ Ошибка: данные не найдены');
+        
         await this.executeBroadcast(chatId, tempData.text, photoId);
+        await userService.clearTempData(query.from.id);
+      }
+
+      // Рассылка: подтверждение с документом (файлом)
+      if (data.startsWith('broadcast_confirm_with_doc_')) {
+        await this.bot.answerCallbackQuery(query.id, { text: 'Начинаю рассылку файлов...' });
+        const fileId = data.replace('broadcast_confirm_with_doc_', '');
+        const tempData = await userService.getTempData(query.from.id);
+        
+        if (!tempData?.text) return this.bot.sendMessage(chatId, '❌ Ошибка: данные не найдены');
+        
+        await this.executeBroadcastDocument(chatId, tempData.text, fileId);
         await userService.clearTempData(query.from.id);
       }
 
@@ -740,7 +783,7 @@ export class MarketplaceBot {
     });
   }
 
-  // Метод рассылки
+  // Метод рассылки фото
   async executeBroadcast(adminChatId, text, photoId) {
     try {
       const users = await userService.getAllUsersForBroadcast();
@@ -767,7 +810,6 @@ export class MarketplaceBot {
           logger.error(`Broadcast failed for ${user.telegramId}:`, err.message);
         }
 
-        // Обновляем статус каждые 10
         if ((i + 1) % 10 === 0 || i === users.length - 1) {
           try {
             await this.bot.editMessageText(
@@ -776,7 +818,7 @@ export class MarketplaceBot {
             );
           } catch (e) {}
         }
-        await new Promise(resolve => setTimeout(resolve, 50)); // Задержка
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
 
       await this.bot.sendMessage(adminChatId,
@@ -788,5 +830,51 @@ export class MarketplaceBot {
       await this.bot.sendMessage(adminChatId, '❌ Ошибка рассылки: ' + err.message);
     }
   }
-}
 
+  // Метод рассылки документов (файлов)
+  async executeBroadcastDocument(adminChatId, text, fileId) {
+    try {
+      const users = await userService.getAllUsersForBroadcast();
+      const total = users.length;
+      let success = 0;
+      let failed = 0;
+      
+      const statusMsg = await this.bot.sendMessage(adminChatId, 
+        `📤 Рассылка файлов начата...\n\nВсего: ${total}\n✅: 0\n❌: 0`,
+        { parse_mode: 'HTML' }
+      );
+
+      for (let i = 0; i < users.length; i++) {
+        const user = users[i];
+        try {
+          await this.bot.sendDocument(user.telegramId, fileId, { 
+            caption: text, 
+            parse_mode: 'HTML' 
+          });
+          success++;
+        } catch (err) {
+          failed++;
+          logger.error(`Broadcast doc failed for ${user.telegramId}:`, err.message);
+        }
+
+        if ((i + 1) % 10 === 0 || i === users.length - 1) {
+          try {
+            await this.bot.editMessageText(
+              `📤 Рассылка файлов...\n\nВсего: ${total}\n✅: ${success}\n❌: ${failed}\n📊 ${Math.round(((i + 1) / total) * 100)}%`,
+              { chat_id: adminChatId, message_id: statusMsg.message_id }
+            );
+          } catch (e) {}
+        }
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      await this.bot.sendMessage(adminChatId,
+        `✅ <b>Рассылка файлов завершена!</b>\n\n📊 Всего: ${total}\n✅ Успешно: ${success}\n❌ Ошибок: ${failed}`,
+        { parse_mode: 'HTML' }
+      );
+    } catch (err) {
+      logger.error('Broadcast document error:', err);
+      await this.bot.sendMessage(adminChatId, '❌ Ошибка рассылки: ' + err.message);
+    }
+  }
+}
