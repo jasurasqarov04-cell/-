@@ -10,7 +10,7 @@ export class SubscriptionService {
       where: {
         userId,
         type: 'PRO',
-        isActive: true,
+        isActive: true,  // УБЕДИТЕСЬ, что это поле есть в schema.prisma!
         OR: [{ endDate: null }, { endDate: { gt: new Date() } }]
       }
     });
@@ -19,12 +19,15 @@ export class SubscriptionService {
 
   async getSubscriptionInfo(userId) {
     const sub = await prisma.subscription.findFirst({
-      where: { userId, isActive: true },
+      where: { 
+        userId, 
+        isActive: true  // Проверьте наличие этого поля в схеме!
+      },
       orderBy: { startDate: 'desc' }
     });
 
-    if (!sub) {
-      return { type: 'FREE', status: 'inactive' };
+    if (!sub || sub.type !== 'PRO') {
+      return { type: 'FREE', status: 'inactive', daysLeft: 0 };
     }
 
     const daysLeft = sub.endDate 
@@ -39,26 +42,51 @@ export class SubscriptionService {
     };
   }
 
+  // ОТЗЫВ PRO — ИСПРАВЛЕННЫЙ (деактивирует, не удаляет)
   async revokePro(userId) {
-  // Удаляем активные подписки PRO (или меняем на FREE)
-  await prisma.subscription.deleteMany({
-    where: {
-      userId,
-      type: 'PRO',
-      endDate: { gt: new Date() }
+    try {
+      // Вариант 1: Если есть поле isActive в схеме — деактивируем
+      await prisma.subscription.updateMany({
+        where: {
+          userId,
+          type: 'PRO',
+          isActive: true
+        },
+        data: {
+          isActive: false,
+          endDate: new Date() // Заканчиваем сегодня
+        }
+      });
+
+      // Вариант 2: Если поля isActive НЕТ — просто ставим endDate в прошлое
+      // Раскомментируйте это и закомментируйте блок выше, если isActive нет в схеме:
+      /*
+      await prisma.subscription.updateMany({
+        where: {
+          userId,
+          type: 'PRO',
+          endDate: { gt: new Date() }
+        },
+        data: {
+          endDate: new Date(0) // 1970 год = точно истекла
+        }
+      });
+      */
+
+      logger.info(`PRO revoked for user ${userId}`);
+      return { success: true };
+    } catch (error) {
+      logger.error('Revoke PRO error: ' + error.message);
+      throw error;
     }
-  });
+  }
   
-  logger.info(`PRO revoked for user ${userId}`);
-  return { success: true };
-}
-  
-  // Выдача PRO подписки (для админа) - НОВЫЙ МЕТОД
+  // Выдача PRO подписки
   async grantPro(userId, days = 30) {
     try {
       // Деактивируем текущие подписки
       await prisma.subscription.updateMany({
-        where: { userId, isActive: true },
+        where: { userId, isActive: true },  // Проверьте наличие isActive!
         data: { isActive: false }
       });
 
@@ -71,7 +99,7 @@ export class SubscriptionService {
           userId,
           type: 'PRO',
           endDate,
-          isActive: true,
+          isActive: true,  // Проверьте наличие isActive!
         }
       });
 
@@ -85,4 +113,3 @@ export class SubscriptionService {
 }
 
 export const subscriptionService = new SubscriptionService();
-
