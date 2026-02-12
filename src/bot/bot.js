@@ -603,7 +603,7 @@ export class MarketplaceBot {
       // Админ: рассылка (начало)
       if (data === 'admin_broadcast') {
         await this.bot.answerCallbackQuery(query.id);
-        await userService.setTempData(msg.from.id, { action: 'broadcast_text' });
+        await userService.setTempData(query.from.id, { action: 'broadcast_text' });
         await this.bot.sendMessage(chatId, '📢 Введите текст для рассылки всем пользователям:', { parse_mode: 'HTML' });
       }
 
@@ -789,3 +789,4 @@ export class MarketplaceBot {
     }
   }
 }
+
