@@ -110,4 +110,5 @@ export class UserService {
   }
 }
 
-export const user
+// ВОТ ЭТО ИСПРАВЛЕННАЯ СТРОКА (было обрезано):
+export const userService = new UserService();
